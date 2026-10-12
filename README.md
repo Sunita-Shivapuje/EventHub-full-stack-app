@@ -1,224 +1,111 @@
-# EventHub
+EventHub
 
-Full-stack event discovery and ticket-reservation platform. **Organizers** create, publish and manage events and monitor bookings; **attendees** discover events, reserve tickets, view and cancel their bookings. Bookings are reservations only - no payment is collected.
+Event discovery and ticket reservation. Organizers create, publish and manage events; attendees search events, reserve tickets, and view or cancel their bookings. A booking is a reservation only. No payment is taken.
 
-**Stack:** React 18 + Vite + Tailwind CSS 4 (frontend) · Node.js 20+ / Express 4 (API) · PostgreSQL 13+ · Zod (validation) · JWT + bcrypt (auth) · Vitest + Supertest (tests)
+Stack: React + Vite + Tailwind CSS, Node.js (Express), PostgreSQL, Zod for validation, JWT in an httpOnly cookie, Vitest + Supertest for tests.
 
-## Implemented features
+Live app: add URL | Repo: add URL
 
-- Register / sign in (JWT), two roles: `attendee` and `organizer` (one role per account - see *Design decisions*)
-- Public discovery: search, category / location / date-range filters, sort by start time, server-side pagination, availability display, empty and error states
-- Organizer: create / edit / publish / unpublish / cancel events, dashboard with capacity metrics and booking list
-- Attendee: book 1-10 tickets with a confirmation dialog, booking confirmation + history + detail, cancel with clear "why not" messages
-- **Oversell-proof booking** (atomic conditional UPDATE inside a transaction), idempotent retries, price snapshots, one-time capacity release on cancel
-- 50 automated tests (unit + database-backed integration + real concurrency)
+Run locally
 
-## Repository layout
+Needs Node 20+ and PostgreSQL 13+.
 
-```
-backend/
-  migrations/001_init.sql      schema, constraints, indexes
-  src/
-    domain/rules.js            pure business rules (lifecycle, cancellation policy, schedule validation)
-    validators.js              Zod schemas (+ parse() -> 422 field errors)
-    routes/                    HTTP only: auth, events (public + booking), organizer, bookings
-    services/                  business logic + SQL: authService, eventService, bookingService
-    middleware/                auth (JWT -> user, role checks), error handler
-    scripts/migrate.js, seed.js
-  tests/                       rules (unit), events (API), bookings (API + concurrency)
-frontend/src/
-  pages/  components/  api.js  auth.jsx  utils.js
-```
-
-## Core data model
-
-```mermaid
-erDiagram
-  USERS ||--o{ EVENTS : "organizes (organizer_id)"
-  USERS ||--o{ BOOKINGS : "books (attendee_id)"
-  EVENTS ||--o{ BOOKINGS : "has (event_id)"
-  USERS { uuid id PK
-          text email "unique, case-insensitive"
-          text role "attendee | organizer" }
-  EVENTS { uuid id PK
-           int capacity "CHECK > 0"
-           int reserved_count "CHECK >= 0 AND <= capacity"
-           int price_cents "CHECK >= 0"
-           text status "draft | published | completed | cancelled"
-           timestamptz starts_at
-           timestamptz ends_at "CHECK > starts_at" }
-  BOOKINGS { uuid id PK
-             text reference "unique, e.g. EH-7K2M9QXA"
-             int quantity "CHECK > 0"
-             int unit_price_cents "snapshot"
-             bigint total_cents "CHECK = unit_price * quantity"
-             text status "confirmed | cancelled"
-             text cancellation_reason "attendee_cancelled | event_cancelled"
-             text idempotency_key "UNIQUE per attendee" }
-```
-
-Indexes: `events(status, starts_at)`, `events(organizer_id)`, `events(lower(category))`, `bookings(attendee_id, created_at DESC)`, `bookings(event_id, status)`, unique `users(lower(email))`.
-
-**Money** is stored as integer minor units (`price_cents`, `total_cents`); no floating-point arithmetic anywhere. **Time** is stored as `timestamptz` (UTC). The API speaks ISO-8601; the browser shows/enters times in the user's local zone and converts to UTC. Date filters are sent as the start/end of the chosen local day.
-
-## Run locally
-
-Prerequisites: Node 20+, PostgreSQL 13+ (or Docker).
-
-```bash
-
-
-# 2. Backend
+bash
+# backend
 cd backend
-cp .env.example .env          
+cp .env.example .env        # then edit DATABASE_URL
 npm install
-npm run migrate              
-npm run seed                  
-npm run dev                   
+npm run migrate             # create tables
+npm run seed                # demo users and events
+npm run dev                 # API on :4000
 
-# 3. Frontend (new terminal)
+# frontend (second terminal)
 cd frontend
 npm install
-npm run dev                  
-```
+npm run dev                 # app on :5173, proxies /api to :4000
 
-### Environment variables
+Demo logins (seeded, fake data): attendee@eventhub.demo / Attendee123! and organizer@eventhub.demo / Organizer123!. A second organizer (organizer2@eventhub.demo, same password) is there for checking ownership rules. You can also register either role on the sign-up page.
 
-| Backend (`backend/.env`) | Purpose |
-|---|---|
-| `NODE_ENV` | `development` / `production` / `test` |
-| `PORT` | API port (default 4000) |
-| `DATABASE_URL` | Postgres connection string |
-| `TEST_DATABASE_URL` | Separate DB used by `npm test` (**tables are truncated**) |
-| `DATABASE_SSL` | `true` for hosted DBs that require SSL |
-| `JWT_SECRET` | Long random string; **required in production** |
-| `JWT_EXPIRES_IN` | Token lifetime (default `7d`) |
-| `BCRYPT_ROUNDS` | Hash cost (default 10) |
-| `CORS_ORIGINS` | Comma-separated allowed browser origins (your frontend URL) |
+Environment variables
+Variable	Purpose
+DATABASE_URL	Postgres connection string (DATABASE_SSL=true if the host needs TLS)
+TEST_DATABASE_URL	Separate database for tests. Tables get truncated, so the name must contain "test"
+JWT_SECRET	Long random string. Required in production
+CORS_ORIGINS, COOKIE_SAMESITE, COOKIE_SECURE	Only needed if frontend and API are on different sites
+SERVE_FRONTEND, RUN_MIGRATIONS	Production single-service mode (see Deployment)
+MAX_TICKETS_PER_BOOKING, CANCELLATION_CUTOFF_HOURS, DEFAULT_CURRENCY	Business rules (defaults: 10, 0, INR)
+Tests
+bash
+cd backend && npm test     # needs TEST_DATABASE_URL
 
-| Frontend | Purpose |
-|---|---|
-| `VITE_API_URL` | API origin in production (empty in local dev) |
-| `VITE_CURRENCY` | ISO currency code for display (default `USD`) |
+131 backend tests run against a real Postgres database: unit tests for the rules and validation, API tests for permissions and booking behaviour, and concurrency tests that fire parallel requests (for example 25 buyers for 5 seats, and two buyers wanting 4 of the last 5). The atomicity test forces a failure after the booking row is written and checks nothing survives. I also temporarily removed the row lock to confirm the concurrency tests fail without it. cd frontend && npm test covers the money and date helpers.
 
-## Tests
-
-```bash
-cd backend
-npm test        
-```
-
-| # | Required area | Where |
-|---|---|---|
-| 1 | Event validation | `events.test.js` "event validation" |
-| 2 | Draft/cancelled not visible or bookable | "event visibility" |
-| 3 | Organizer ownership | "organizer ownership" |
-| 4 | Booking quantity validation | `bookings.test.js` "booking validation" |
-| 5 | Server-calculated totals | "server-calculated totals" |
-| 6 | Capacity limits | "capacity limits" |
-| 7 | **Concurrency** (2 x 4 tickets vs 5 left; 40 parallel buyers) | "concurrent bookings" |
-| 8 | **Atomicity** (a DB trigger forces the INSERT to fail; reserved seats must roll back) | "atomicity" |
-| 9 | Cancel frees capacity once (incl. 5 simultaneous cancels) | "cancellation frees capacity exactly once" |
-| 10 | Booking privacy | "privacy" |
-| 11 | Organizer booking access | "organizer ownership" + "privacy" |
-| 12 | Price snapshot | "price snapshot" |
-| 13 | Lifecycle rules | `rules.test.js` + "lifecycle rules" |
-
-Also covered: idempotent retries / double-submit, DB `CHECK` backstop, auth/role enforcement, discovery filters and pagination, event cancellation preserving history, dashboard metrics. I also verified the concurrency tests are not vacuous: removing the capacity condition from the booking `UPDATE` makes them fail.
-
-## Main API routes
-
-All errors use `{ "error": { "code", "message", "details?" } }`. Statuses: 401 unauthenticated, 403 wrong role, 404 not found *or not yours*, 409 state/capacity conflicts, 422 validation (with per-field `details`).
-
-| Method & path | Auth | Purpose |
-|---|---|---|
-| `POST /api/auth/register` · `POST /api/auth/login` · `GET /api/auth/me` | - / - / any | Auth, current user |
-| `GET /api/events?q&category&location&from&to&sort&page&pageSize` | public | Published, upcoming events |
-| `GET /api/events/categories` | public | Categories for the filter |
-| `GET /api/events/:id` | public (owner sees own drafts) | Event detail + `remaining` |
-| `POST /api/events/:id/bookings` `{quantity}` + optional `Idempotency-Key` header | attendee | Create booking (201; 200 on replay) |
-| `GET /api/bookings` · `GET /api/bookings/:id` | attendee (own) | History, detail |
-| `POST /api/bookings/:id/cancel` | attendee (own) | Cancel |
-| `GET/POST /api/organizer/events` · `GET/PATCH /api/organizer/events/:id` | organizer (own) | List / create / read / edit |
-| `POST /api/organizer/events/:id/{publish,unpublish,cancel}` | organizer (own) | Lifecycle transitions |
-| `GET /api/organizer/events/:id/summary` · `.../bookings?status&page` | organizer (own) | Dashboard metrics, booking list |
-| `GET /health` | public | DB connectivity check |
-
-## Rules
-
-**Event lifecycle** - `draft → published | cancelled`; `published → draft (unpublish) | completed | cancelled`; `completed` and `cancelled` are terminal. Status is never accepted from the client; only the transition endpoints change it.
-- *Unpublish* is refused while confirmed bookings exist (cancel the event instead).
-- *Completed* is automatic: published events past their end time are marked completed (on reads and every 60 s).
-- *Edit* is allowed for draft/published only. Capacity cannot go below tickets already booked (409 `CAPACITY_BELOW_RESERVED`). Changing time or venue on an event that has bookings stamps `details_changed_at`; attendees then see a warning banner on the event and on their booking.
-- *Cancel event*: every confirmed booking becomes `cancelled` with reason `event_cancelled`, its seats are released, and the rows are kept; attendees see "event cancelled" on the booking. No refunds (no payments).
-
-**Booking** - quantity is a whole number from 1 to 10; event must be published and not yet started; quantity must fit remaining capacity. Total = unit price snapshot x quantity, computed on the server. States: `confirmed → cancelled` only.
-
-**Cancellation cutoff** - an attendee may cancel a confirmed booking **until the event start time**. Blocked (409, with a message the UI displays) if already cancelled, event cancelled, event completed, or start time reached.
-
-## How capacity is calculated and protected
-
-`remaining = capacity − reserved_count`, where `reserved_count` = sum of quantities of *confirmed* bookings, kept in step inside the same transactions that change bookings. The dashboard re-derives it from the `bookings` table and exposes `counterInSync` as a self-check.
+Core data model
+users 1 ──< events 1 ──< bookings >── 1 users
+(organizer)                          (attendee)
+Table	Main columns
+users	id, name, email (unique, case-insensitive), password_hash, role (attendee / organizer)
+events	id, organizer_id, title, description, category, location, start_time, end_time, capacity, price_cents, currency, status, schedule_changed_at, cancelled_at
+bookings	id, reference (unique), attendee_id, event_id, quantity, unit_price_cents, total_cents, currency, status, cancelled_at, cancelled_reason, idempotency_key
+Money is stored as integer minor units, never floats. Times are timestamptz (UTC); the browser shows and enters local time.
+Database checks back up the app rules: capacity > 0, price_cents >= 0, end_time > start_time, quantity > 0, total_cents = quantity * unit_price_cents, and cancelled bookings must carry a cancel time and reason.
+UNIQUE (attendee_id, idempotency_key) makes retries safe. Foreign keys use ON DELETE RESTRICT, so history is never lost.
+Indexes cover event status and start time, organizer, category, and bookings by attendee and by event (a partial index covers confirmed bookings only).
+Remaining capacity is not stored. It is always capacity - SUM(quantity) over confirmed bookings, so it cannot drift.
+How overbooking is prevented
 
 Booking runs in one transaction:
 
-```sql
-UPDATE events SET reserved_count = reserved_count + :qty
- WHERE id = :id AND status = 'published' AND starts_at > now()
-   AND reserved_count + :qty <= capacity
-RETURNING price_cents;          
-INSERT INTO bookings (...) ;    
-```
+SELECT ... FROM events WHERE id = $1 FOR UPDATE locks the event row. Concurrent bookings for that event queue here.
+Remaining capacity is recalculated from confirmed bookings.
+If the event is not published, has started, or the quantity does not fit, the request is rejected and nothing is written.
+The booking is inserted with the current price copied in and the total computed on the server.
 
-- The `UPDATE` check-and-reserve is a single atomic statement. Postgres row-locks the event; concurrent bookings queue and each re-evaluates the condition against the latest committed value, so two requests can never both pass.
-- If the `INSERT` fails, the transaction rolls back and the reservation disappears (no partial state).
-- The price snapshot is read from the same locked row that reserved the seats.
-- `CHECK (reserved_count <= capacity)` is a last-resort backstop at the database level.
-- Cancel (`confirmed → cancelled` + `reserved_count − qty`) and event edits/cancellation take the **event row lock first**, then booking rows, everywhere - one lock order, so no deadlocks. A cancel locks the booking and re-checks its status, so repeats and races release seats exactly once.
+Any error rolls the whole transaction back. Editing capacity and cancelling an event take the same event lock, so they cannot interleave with a booking.
 
-**Duplicate-submission safeguards:** the UI disables buttons while a request is in flight and generates one `Idempotency-Key` per booking attempt; the server has a `UNIQUE (attendee_id, idempotency_key)` constraint, so a retry or double-click returns the original booking (HTTP 200, `replayed: true`) and reserves nothing. Racing duplicates are resolved by that constraint (the loser's transaction rolls back).
+Cancellation locks the booking row and runs UPDATE ... WHERE status = 'confirmed'. Because capacity is derived from confirmed bookings, flipping the status is the release, and a repeated or simultaneous cancel can only succeed once.
 
-## Organizer dashboard metrics
+Double clicks and retries: the UI disables the button while a request is in flight and sends one Idempotency-Key per booking attempt. A repeat returns the original booking (HTTP 200) instead of creating another.
 
-| Metric | Definition |
-|---|---|
-| Total capacity | `events.capacity` |
-| Tickets booked | sum of `quantity` of **confirmed** bookings |
-| Remaining | capacity − tickets booked |
-| Confirmed bookings | count of confirmed bookings |
-| Cancelled bookings | count of cancelled bookings (attendee- or event-cancelled); history is kept but they hold no capacity |
-| Booked value | sum of `total_cents` of confirmed bookings (price snapshots; *not* money collected) |
-| Cancelled value | sum of `total_cents` of cancelled bookings |
+Rules
+Event lifecycle: draft to published or cancelled; published to draft (only with no confirmed bookings), completed, or cancelled. Completed and cancelled are final. Status can only change through the publish / unpublish / cancel endpoints, never through a request body. Published events past their end time read as completed immediately and are saved as completed by a background sweep.
+Editing: draft and published events only. Capacity cannot go below tickets already booked. Changing time or venue when bookings exist stamps schedule_changed_at, and attendees see a notice.
+Cancelling an event: its confirmed bookings become cancelled with reason event_cancelled. Rows are kept, so history stays visible.
+Booking: whole number from 1 to 10, event published and not yet started.
+Cancellation cutoff: attendees can cancel until the event starts (configurable). The API explains why when it refuses, and the UI shows that message.
+Roles: an organizer can do everything an attendee can, plus manage their own events. Role is read from the database on every request.
+Dashboard metrics: capacity; tickets reserved (sum of confirmed quantities); remaining; confirmed and cancelled booking counts; reserved value (sum of confirmed totals, from price snapshots, not money collected); cancelled value.
+API
 
-## Demo access
+Errors look like { "error": { "code", "message", "details?" } }. Status codes: 400 validation, 401 not signed in, 403 wrong role or not your event, 404 not found (including other people's bookings and drafts), 409 conflicts such as sold out or invalid transition, 422 reused idempotency key.
 
-Seeded accounts (password `Password123!`): `organizer@example.com`, `organizer2@example.com`, `attendee@example.com`, `attendee2@example.com`. The sign-in page has one-click "Use demo attendee / organizer" buttons, and you can also self-register either role.
+Route	Who	Purpose
+POST /api/auth/register, /login, /logout; GET /api/auth/me	any	Session
+GET /api/events?q&category&location&from&to&sort&page&pageSize	public	Published upcoming events
+GET /api/events/:id, GET /api/categories	public	Detail (drafts only for owner), filter list
+POST /api/events, PATCH /api/events/:id	organizer	Create, edit own event
+POST /api/events/:id/publish, /unpublish, /cancel	organizer	Lifecycle
+GET /api/organizer/events, GET /api/events/:id/summary, GET /api/events/:id/bookings	organizer (owner)	Dashboard
+POST /api/bookings (+ Idempotency-Key), GET /api/bookings, GET /api/bookings/:id, POST /api/bookings/:id/cancel	signed in (own)	Book, history, cancel
+GET /api/health	public	Database check
+Deployment
 
-**Deployed URL:** _add after deploying_ · **Repository:** _add_
+The API can serve the built frontend, so one service is enough. On Render or similar, create a Postgres database, then:
 
-## Deployment (Render or similar)
+Build: npm --prefix frontend ci && npm --prefix frontend run build && npm --prefix backend ci
+Start: npm --prefix backend start
+Env: NODE_ENV=production, DATABASE_URL, JWT_SECRET, SERVE_FRONTEND=true, RUN_MIGRATIONS=true, plus DATABASE_SSL=true if required. Health check path: /api/health.
+Run npm run seed once in the backend shell to load the demo accounts.
 
-`render.yaml` is a Blueprint starting point (Postgres + API web service + static frontend). Manually:
-1. Create a Postgres database; copy its connection string.
-2. API: root `backend`, build `npm install && npm run migrate`, start `npm start`, health check `/health`. Set `NODE_ENV=production`, `DATABASE_URL`, `JWT_SECRET` (random), `CORS_ORIGINS` (frontend URL), and `DATABASE_SSL=true` if your host requires SSL.
-3. Frontend: root `frontend`, build `npm run build`, publish `dist`, rewrite `/*` → `/index.html` (`_redirects` and `vercel.json` included). Set `VITE_API_URL` to the API URL.
-4. Optional demo data: run `npm run seed` once in the API shell.
+Free tiers sleep when idle, so the first request after a pause can take up to a minute.
 
-Note: free tiers sleep when idle, so the first request after a pause can take 30-60 s; free Render Postgres instances expire after a limited period.
+Trade-offs and known gaps
+Anyone can pick the organizer role at sign-up. Fine for an assessment, not for production.
+Not built: email verification, password reset, refresh tokens, payments or refunds, waitlists, notifications, an admin role. Login and register are rate limited; other routes are not.
+Search uses ILIKE. For a large catalogue, switch to pg_trgm or full-text search.
+Date filters in the UI use the browser's local day; the API treats plain dates as UTC days.
+Cancelling an event cancels its bookings automatically; there is no refund step because no payment exists.
 
-## Design decisions, limitations and trade-offs
-
-- **One role per account** (attendee *or* organizer), chosen at registration. Organizers cannot book; this keeps permission rules simple and explicit. Role is re-read from the database on every request, never trusted from the token or client.
-- **Non-owned resources return 404, not 403**, so IDs cannot be probed.
-- **JWT in `localStorage`** (Bearer header) for simple cross-origin deployment. Trade-off: exposed to XSS; the production-grade alternative is an httpOnly, SameSite cookie with CSRF protection. React's escaping and Helmet reduce, but do not remove, that risk.
-- Self-registration lets anyone choose the organizer role - acceptable for an assessment, not for production.
-- Not implemented: rate limiting, email verification, password reset, refresh tokens, payments/refunds, waitlists, notifications, an admin role, per-user booking caps across bookings of the same event.
-- Event "Completed" is derived from end time rather than set manually.
-- Search uses `ILIKE`; fine at this scale, use `pg_trgm`/full-text search for large catalogs.
-- Deployment config is provided but **not deployed or verified by the author of this scaffold** - test your deployed URL from a fresh browser session before submitting.
-
-## AI-use disclosure
-
-> _Edit this section so it reflects what you actually did and reviewed._
-
-This project was generated with **Claude (Anthropic)** from the assessment brief: schema, API, tests and UI. The assistant ran the backend test suite against a real PostgreSQL 16 instance (50 passing), checked that removing the capacity guard makes the concurrency tests fail, built the frontend, and ran a jsdom smoke test of the login → browse → book → cancel → organizer-dashboard flows against the live API. It did **not** deploy the app or test it in a real browser. Things the submitter should personally review and be ready to explain: `bookingService.createBooking` and `cancelBooking` (transaction boundaries and lock order), `eventService.updateEvent` / `transition`, `middleware/auth.js`, and the capacity section above.
+AI USED 
+I used Claude AI as a supporting tool to help me develop the EventHub project, understand technical concepts, and resolve coding errors.
+Claude AI also assisted with debugging, improving the code, and troubleshooting deployment issues throughout the project.
