@@ -22,7 +22,7 @@ npm run dev                 # API on :4000
 # frontend (second terminal)
 cd frontend
 npm install
-npm run dev                 # app on :5173, proxies /api to :4000
+npm run dev                 
 
 Demo logins (seeded, fake data): attendee@eventhub.demo / Attendee123! and organizer@eventhub.demo / Organizer123!. A second organizer (organizer2@eventhub.demo, same password) is there for checking ownership rules. You can also register either role on the sign-up page.
 
