@@ -1,38 +1,8 @@
-# Render Blueprint (starting point - review before use). Creates Postgres + API + static frontend.
-databases:
-  - name: eventhub-db
-    plan: free
-services:
-  - type: web
-    name: eventhub-api
-    runtime: node
-    rootDir: backend
-    buildCommand: npm install && npm run migrate
-    startCommand: npm start
-    healthCheckPath: /health
-    envVars:
-      - { key: NODE_ENV, value: production }
-      - { key: DATABASE_URL, fromDatabase: { name: eventhub-db, property: connectionString } }
-      - { key: JWT_SECRET, generateValue: true }
-      - { key: CORS_ORIGINS, sync: false }   # set to the static site URL after first deploy
-  - type: web
-    name: eventhub-web
-    runtime: static
-    rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist
-    routes:
-      - { type: rewrite, source: /*, destination: /index.html }
-    envVars:
-      - { key: VITE_API_URL, sync: false }   # set to the API URL, e.g. https://eventhub-api.onrender.com
-# Render Blueprint: PostgreSQL + API + static frontend
-
 databases:
   - name: eventhub-db
     plan: free
 
 services:
-  # Backend API
   - type: web
     name: eventhub-api
     runtime: node
@@ -53,7 +23,6 @@ services:
       - key: CORS_ORIGINS
         sync: false
 
-  # Frontend
   - type: web
     name: eventhub-web
     runtime: static
