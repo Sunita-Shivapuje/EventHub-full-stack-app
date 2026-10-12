@@ -4,7 +4,7 @@ Event discovery and ticket reservation. Organizers create, publish and manage ev
 
 Stack: React + Vite + Tailwind CSS, Node.js (Express), PostgreSQL, Zod for validation, JWT in an httpOnly cookie, Vitest + Supertest for tests.
 
-Live app: add URL | Repo: add URL
+Live app: https://eventhub-web-q9t4.onrender.com/
 
 Run locally
 
@@ -36,7 +36,7 @@ SERVE_FRONTEND, RUN_MIGRATIONS	Production single-service mode (see Deployment)
 MAX_TICKETS_PER_BOOKING, CANCELLATION_CUTOFF_HOURS, DEFAULT_CURRENCY	Business rules (defaults: 10, 0, INR)
 Tests
 bash
-cd backend && npm test     # needs TEST_DATABASE_URL
+cd backend && npm test    
 
 131 backend tests run against a real Postgres database: unit tests for the rules and validation, API tests for permissions and booking behaviour, and concurrency tests that fire parallel requests (for example 25 buyers for 5 seats, and two buyers wanting 4 of the last 5). The atomicity test forces a failure after the booking row is written and checks nothing survives. I also temporarily removed the row lock to confirm the concurrency tests fail without it. cd frontend && npm test covers the money and date helpers.
 
